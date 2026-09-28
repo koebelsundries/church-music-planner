@@ -1,10 +1,15 @@
-const CACHE_NAME = 'church-music-planner-v1';
+const CACHE_NAME = 'sing-hymnal-v7';
 const ASSETS = [
   './',
   './index.html',
   './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
+  './fonts/bauhaus-bold.otf',
+  './fonts/bauhaus-medium.otf',
+  './fonts/bauhaus-demi.otf',
+  './fonts/canvasans-regular.otf',
+  './fonts/canvasans-medium.otf',
+  './fonts/canvasans-bold.otf',
+  './icons/fbc-logo-sm.png'
 ];
 
 self.addEventListener('install', e => {
