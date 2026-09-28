@@ -1,4 +1,4 @@
-const CACHE_NAME = 'sing-hymnal-v7';
+const CACHE_NAME = 'sing-hymnal-v9';
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,11 @@ const ASSETS = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS)));
+  // cache: 'reload' skips the browser's HTTP cache so the newest files
+  // from GitHub are stored, not a recently cached older copy.
+  e.waitUntil(caches.open(CACHE_NAME).then(c =>
+    c.addAll(ASSETS.map(url => new Request(url, { cache: 'reload' })))
+  ));
   self.skipWaiting();
 });
 

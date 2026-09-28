@@ -2082,6 +2082,7 @@ function getFilters() {
   var hymnalLabel = (appSettings.activeHymnal === "bh2008") ? "Baptist Hymnal (2008)" : (appSettings.activeHymnal === "bh1991") ? "Baptist Hymnal (1991)" : "Sing! Hymnal";
   return [
     { label: "All", value: "all" },
+    { label: "Used in " + new Date().getFullYear(), value: "usedyear" },
     { label: hymnalLabel, value: "sing" },
     { label: "Custom", value: "custom" },
     { label: "Classic (<1900)", value: "classic" },
@@ -2437,8 +2438,14 @@ async function loadAllServicePlans() {
 // ============================================================
 // HELPERS
 // ============================================================
+function yearUsage(s, year) {
+  var y = String(year) + "-";
+  return (s.usageDates || []).filter(function(d){ return d.indexOf(y) === 0; });
+}
+
 function filterSong(s, f) {
   if (f === "all") return true;
+  if (f === "usedyear") return yearUsage(s, new Date().getFullYear()).length > 0;
   if (f === "custom") return !!s.isCustom;
   if (f === "sing") return !s.isCustom;
   if (f === "classic") return s.year > 0 && s.year < 1900;
@@ -2525,6 +2532,7 @@ let editingTemplate = false;
 let planPreviewOpen = false;
 let planCopied = false;
 let planShowLinks = false;
+let reportYear = new Date().getFullYear();
 let appSettings = { id: "app", churchName: "", churchLocation: "", activeHymnal: "sing" };
 
 // ============================================================
@@ -2601,6 +2609,8 @@ document.addEventListener("click", function(e) {
     case "closePreview": previewOpen = false; render(); break;
     case "closeOverlay": previewOpen = false; render(); break;
     case "exportData": exportData(); break;
+    case "exportYearPdf": doExportYearPdf(); break;
+    case "exportYearCsv": doExportYearCsv(); break;
     case "addTeamMember": doAddTeamMember(); break;
     case "removeMember":
       if (confirm("Remove this team member?")) {
@@ -2679,6 +2689,7 @@ document.addEventListener("change", function(e) {
     e.target.value = "";
   }
   if (e.target.id === "sortSelect") { sort = e.target.value; render(); }
+  if (e.target.id === "reportYearSelect") { reportYear = parseInt(e.target.value); render(); }
 });
 
 // Keydown delegation for Enter on inputs
@@ -3587,6 +3598,118 @@ async function doSaveChurchSettings() {
   render();
 }
 
+// ============================================================
+// ANNUAL USAGE REPORT
+// ============================================================
+function getReportYears() {
+  var years = {};
+  years[new Date().getFullYear()] = true;
+  songs.forEach(function(s) {
+    (s.usageDates || []).forEach(function(d) { var y = parseInt(d.slice(0,4)); if (y) years[y] = true; });
+  });
+  return Object.keys(years).map(Number).sort(function(a,b){return b-a;});
+}
+
+// Primary sort: most used in the year. Secondary: alphabetical by title.
+function getYearReport(year) {
+  return songs.map(function(s) {
+    var dates = yearUsage(s, year).slice().sort();
+    return { song: s, dates: dates, count: dates.length };
+  }).filter(function(r){ return r.count > 0; })
+    .sort(function(a,b) {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.song.title.localeCompare(b.song.title, undefined, { sensitivity: "base" });
+    });
+}
+
+function shortDate(d) {
+  var dt = new Date(d + "T12:00:00");
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function renderYearReportCard() {
+  var rows = getYearReport(reportYear);
+  var total = rows.reduce(function(n,r){ return n + r.count; }, 0);
+  var h = '<div class="dash-card"><div class="section-label">\uD83D\uDCCA Yearly Song Report</div>';
+  h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
+  h += '<select class="sort" id="reportYearSelect" aria-label="Report year">';
+  getReportYears().forEach(function(y) {
+    h += '<option value="' + y + '"' + (y === reportYear ? ' selected' : '') + '>' + y + '</option>';
+  });
+  h += '</select>';
+  h += '<div style="flex:1;min-width:140px;font-size:13px;color:var(--text2)">' + rows.length + ' song' + (rows.length === 1 ? '' : 's') + ', ' + total + ' use' + (total === 1 ? '' : 's') + '</div>';
+  h += '</div>';
+  h += '<div style="display:flex;gap:8px;margin-top:10px">';
+  h += '<button class="btn btn-copper" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (rows.length ? '' : ' disabled') + ' data-action="exportYearPdf">\uD83D\uDCC4 Print / PDF</button>';
+  h += '<button class="btn btn-ghost" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (rows.length ? '' : ' disabled') + ' data-action="exportYearCsv">\u2B07 Download CSV</button>';
+  h += '</div>';
+  if (!rows.length) h += '<div style="font-size:12px;color:var(--text3);font-style:italic;margin-top:8px">No songs logged in ' + reportYear + ' yet.</div>';
+  h += '</div>';
+  return h;
+}
+
+function doExportYearPdf() {
+  var year = reportYear;
+  var rows = getYearReport(year);
+  var total = rows.reduce(function(n,r){ return n + r.count; }, 0);
+  var hymnalLabel = (appSettings.activeHymnal === "bh2008") ? "Baptist Hymnal (2008)" : (appSettings.activeHymnal === "bh1991") ? "Baptist Hymnal (1991)" : "Sing! Hymnal";
+  var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">';
+  html += '<title>' + E(appSettings.churchName || 'Song Usage') + ' - ' + year + ' Song Report</title>';
+  html += '<style>';
+  html += 'body{font-family:Georgia,serif;max-width:720px;margin:0 auto;padding:24px 28px;color:#1A1A2E;font-size:11px}';
+  html += '.header-block{text-align:center;margin-bottom:6px}';
+  html += '.church-name{font-size:18px;font-weight:bold;color:#3B5998;margin:0}';
+  html += '.church-loc{font-size:11px;color:#4A4A6A;margin:1px 0 0}';
+  html += 'h1{font-size:16px;margin:8px 0 2px;text-align:center}';
+  html += '.summary{font-size:11px;color:#4A4A6A;text-align:center;padding-bottom:8px;margin-bottom:10px;border-bottom:2px solid #B8860B}';
+  html += 'table{width:100%;border-collapse:collapse}';
+  html += 'th{text-align:left;font-size:10px;color:#3B5998;border-bottom:1px solid #1A1A2E;padding:4px 6px}';
+  html += 'td{padding:5px 6px;border-bottom:1px solid #DAD8D2;vertical-align:top}';
+  html += 'tr{page-break-inside:avoid}';
+  html += '.rank{color:#7A7A96;width:22px}.num{color:#B8860B;font-weight:bold;width:34px}.count{font-weight:bold;text-align:center;width:40px}';
+  html += '.title{font-weight:bold}.dates{color:#4A4A6A;font-size:10px}';
+  html += '@media print{body{padding:0}@page{margin:0.5in}}';
+  html += '</style></head><body>';
+  html += '<div class="header-block">';
+  if (appSettings.churchName) html += '<div class="church-name">' + E(appSettings.churchName) + '</div>';
+  if (appSettings.churchLocation) html += '<div class="church-loc">' + E(appSettings.churchLocation) + '</div>';
+  html += '</div>';
+  html += '<h1>' + year + ' Song Usage Report</h1>';
+  html += '<div class="summary">' + E(hymnalLabel) + ' &nbsp;|&nbsp; ' + rows.length + ' songs &nbsp;|&nbsp; ' + total + ' total uses &nbsp;|&nbsp; Printed ' + formatDate(new Date().toISOString().split("T")[0]) + '</div>';
+  html += '<table><thead><tr><th></th><th>#</th><th>Song</th><th style="text-align:center">Times</th><th>Dates used</th></tr></thead><tbody>';
+  rows.forEach(function(r, i) {
+    html += '<tr><td class="rank">' + (i+1) + '.</td>';
+    html += '<td class="num">' + (r.song.hymnNumber || '') + '</td>';
+    html += '<td class="title">' + E(r.song.title) + '</td>';
+    html += '<td class="count">' + r.count + '</td>';
+    html += '<td class="dates">' + r.dates.map(shortDate).join(', ') + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  html += '<script>window.onload=function(){window.print();}<\/script>';
+  html += '</body></html>';
+  var w = window.open('', '_blank');
+  if (w) { w.document.write(html); w.document.close(); }
+  else alert('Please allow pop-ups to export PDF.');
+}
+
+function doExportYearCsv() {
+  var year = reportYear;
+  var rows = getYearReport(year);
+  var q = function(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  var lines = [["Rank","Hymn Number","Title","Times Used","Dates Used","Tune","Category","Tags"].join(",")];
+  rows.forEach(function(r, i) {
+    var s = r.song;
+    lines.push([i+1, s.hymnNumber || "", s.title, r.count, r.dates.join("; "), s.tune || "", s.category || "", (s.tags || []).join("; ")].map(q).join(","));
+  });
+  var blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "song-usage-report-" + year + ".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function doExportPlanPdf() {
   var assignments = currentPlan ? currentPlan.assignments || {} : {};
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">';
@@ -3925,7 +4048,7 @@ function renderDashboard(nextSunday) {
   var neglected = usedSongs.map(function(s) {
     var last = new Date(s.usageDates[0]+"T12:00:00"); last.setHours(0,0,0,0);
     return Object.assign({},s,{daysSince:Math.floor((now-last)/864e5)});
-  }).filter(function(s){return s.daysSince>60;}).sort(function(a,b){return b.daysSince-a.daysSince;}).slice(0,6);
+  }).filter(function(s){return s.daysSince>=60 && s.daysSince<=180;}).sort(function(a,b){return b.daysSince-a.daysSince;}).slice(0,25);
 
   var h = '<div style="padding:0 16px">';
 
@@ -3984,6 +4107,9 @@ function renderDashboard(nextSunday) {
     h += '</div>';
   }
 
+  // Annual usage report
+  h += renderYearReportCard();
+
   // Top tags
   if (tagRanking.length) {
     h += '<div class="dash-card"><div class="section-label">\uD83C\uDFF7\uFE0F Top Tags</div><div class="tag-cloud">';
@@ -4001,7 +4127,7 @@ function renderDashboard(nextSunday) {
 
   // Neglected
   if (neglected.length) {
-    h += '<div class="dash-card"><div class="section-label">\u23F3 Haven\'t Used in 60+ Days</div>';
+    h += '<div class="dash-card"><div class="section-label">\u23F3 Haven\'t Used in 60\u2013180 Days</div>';
     neglected.forEach(function(s) {
       h += miniRow(s, 'Last used ' + daysAgo(s.usageDates[0]) + ' \u2014 ' + formatDate(s.usageDates[0]));
     });
@@ -4560,7 +4686,38 @@ async function init() {
 }
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("sw.js").catch(function(e){console.log("SW reg failed:",e);});
+  // Only show the update banner if an older version was already running
+  // (not on the very first install).
+  var hadController = !!navigator.serviceWorker.controller;
+  var updateBannerShown = false;
+
+  navigator.serviceWorker.register("sw.js").then(function(reg) {
+    // Check for a new version whenever the app is brought back to the front
+    document.addEventListener("visibilitychange", function() {
+      if (document.visibilityState === "visible") reg.update().catch(function(){});
+    });
+  }).catch(function(e){console.log("SW reg failed:",e);});
+
+  navigator.serviceWorker.addEventListener("controllerchange", function() {
+    if (!hadController || updateBannerShown) return;
+    updateBannerShown = true;
+    showUpdateBanner();
+  });
+}
+
+function showUpdateBanner() {
+  var b = document.createElement("button");
+  b.type = "button";
+  b.id = "updateBanner";
+  b.textContent = "Updated \u2014 tap to reload";
+  b.setAttribute("style",
+    "position:fixed;left:50%;transform:translateX(-50%);" +
+    "bottom:calc(16px + env(safe-area-inset-bottom, 0px));z-index:9999;" +
+    "background:var(--accent2);color:#fff;border:none;border-radius:20px;" +
+    "padding:10px 20px;font-size:14px;font-weight:600;font-family:inherit;" +
+    "box-shadow:0 4px 14px rgba(0,0,0,.25);cursor:pointer;max-width:calc(100% - 32px)");
+  b.addEventListener("click", function() { window.location.reload(); });
+  document.body.appendChild(b);
 }
 
 init();
