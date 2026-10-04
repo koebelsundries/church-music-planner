@@ -2082,7 +2082,7 @@ function getFilters() {
   var hymnalLabel = (appSettings.activeHymnal === "bh2008") ? "Baptist Hymnal (2008)" : (appSettings.activeHymnal === "bh1991") ? "Baptist Hymnal (1991)" : "Sing! Hymnal";
   return [
     { label: "All", value: "all" },
-    { label: "Used in " + new Date().getFullYear(), value: "usedyear" },
+    { label: "Used in Current Year", value: "usedyear" },
     { label: hymnalLabel, value: "sing" },
     { label: "Custom", value: "custom" },
     { label: "Classic (<1900)", value: "classic" },
@@ -2219,6 +2219,20 @@ function mergeSongs(base, userData) {
 }
 
 // Team persistence
+// Clears team availability marks for Sundays more than AVAILABILITY_KEEP_DAYS ago.
+async function pruneOldAvailability(members) {
+  var cutoff = dateDaysAgo(AVAILABILITY_KEEP_DAYS);
+  for (var i = 0; i < members.length; i++) {
+    var m = members[i], changed = false;
+    if (!m.availability) continue;
+    Object.keys(m.availability).forEach(function(d) {
+      if (d < cutoff) { delete m.availability[d]; changed = true; }
+    });
+    if (changed) await saveTeamMember(m);
+  }
+  return members;
+}
+
 async function loadTeamMembers() {
   try {
     var db = await openDB();
@@ -2494,7 +2508,23 @@ function daysAgo(ds) {
   if (diff === 1) return "yesterday";
   if (diff < 7) return diff + "d ago";
   if (diff < 30) return Math.floor(diff/7) + "w ago";
-  return Math.floor(diff/30) + "mo ago";
+  if (diff < 365) return Math.floor(diff/30) + "mo ago";
+  return Math.floor(diff/365) + "y ago";
+}
+
+// ---- Display windows (data is never deleted; these only limit what is shown) ----
+var RECENT_USE_DAYS = 365;          // Most Used + catalog badges: last 12 months
+var HISTORY_DISPLAY_DAYS = 730;     // Song detail usage list: last 2 years
+var AVAILABILITY_KEEP_DAYS = 90;    // Team availability older than this is cleared
+
+function dateDaysAgo(n) {
+  var d = new Date(); d.setDate(d.getDate() - n);
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
+}
+
+function usesSince(s, days) {
+  var cutoff = dateDaysAgo(days);
+  return (s.usageDates || []).filter(function(d){ return d >= cutoff; });
 }
 
 function E(s) { const d=document.createElement("div"); d.textContent=s; return d.innerHTML; }
@@ -2532,6 +2562,8 @@ let editingTemplate = false;
 let planPreviewOpen = false;
 let planCopied = false;
 let reportYear = new Date().getFullYear();
+let reportIncludeUnused = true;
+let expandedHistory = {};
 let appSettings = { id: "app", churchName: "", churchLocation: "", activeHymnal: "sing" };
 
 // ============================================================
@@ -2608,6 +2640,8 @@ document.addEventListener("click", function(e) {
     case "closePreview": previewOpen = false; render(); break;
     case "closeOverlay": previewOpen = false; render(); break;
     case "exportData": exportData(); break;
+    case "snoozeBackup": snoozeBackupReminder(); break;
+    case "toggleHistory": expandedHistory[key] = !expandedHistory[key]; render(); break;
     case "exportYearPdf": doExportYearPdf(); break;
     case "exportYearCsv": doExportYearCsv(); break;
     case "addTeamMember": doAddTeamMember(); break;
@@ -2686,6 +2720,7 @@ document.addEventListener("change", function(e) {
   }
   if (e.target.id === "sortSelect") { sort = e.target.value; render(); }
   if (e.target.id === "reportYearSelect") { reportYear = parseInt(e.target.value); render(); }
+  if (e.target.id === "reportIncludeUnused") { reportIncludeUnused = e.target.checked; render(); }
 });
 
 // Keydown delegation for Enter on inputs
@@ -3148,7 +3183,10 @@ function renderCard(s) {
   s.tags.forEach(function(t) { badges.push('<span class="badge badge-tag">' + E(t) + '</span>'); });
   if (s.notes.length) badges.push('<span class="badge badge-note">' + s.notes.length + ' note' + (s.notes.length>1?'s':'') + '</span>');
   if (s.usageDates.length) {
-    badges.push('<span class="badge badge-use">Used ' + s.usageDates.length + '\u00D7 \u00B7 ' + daysAgo(s.usageDates[0]) + '</span>');
+    var recentN = usesSince(s, RECENT_USE_DAYS).length;
+    var lastD = s.usageDates.slice().sort().pop();
+    if (recentN) badges.push('<span class="badge badge-use">Used ' + recentN + '\u00D7 in 12 mo \u00B7 ' + daysAgo(lastD) + '</span>');
+    else badges.push('<span class="badge badge-use">Last used ' + daysAgo(lastD) + '</span>');
   }
   if (badges.length) h += '<div class="card-badges">' + badges.join('') + '</div>';
   h += '</div></div>';
@@ -3268,13 +3306,24 @@ function renderDetail(s) {
   h += '<button class="btn btn-copper" data-action="logCustom" data-key="' + E(key) + '">Log</button>';
   h += '</div>';
   if (s.usageDates.length) {
-    h += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px;font-weight:500">' + s.usageDates.length + ' time' + (s.usageDates.length>1?'s':'') + ' used</div>';
-    s.usageDates.forEach(function(d) {
+    var allDates = s.usageDates.slice().sort().reverse();
+    var histCutoff = dateDaysAgo(HISTORY_DISPLAY_DAYS);
+    var showAllHist = !!expandedHistory[key];
+    var shownDates = showAllHist ? allDates : allDates.filter(function(d){ return d >= histCutoff; });
+    var hiddenCount = allDates.length - shownDates.length;
+    var yearN = usesSince(s, RECENT_USE_DAYS).length;
+    h += '<div style="font-size:11px;color:var(--text3);margin-bottom:4px;font-weight:500">' + allDates.length + ' time' + (allDates.length>1?'s':'') + ' used in total \u00B7 ' + yearN + ' in the last 12 months</div>';
+    if (!shownDates.length) h += '<div style="font-size:12px;color:var(--text3);font-style:italic;padding:4px 0">Not used in the last 2 years.</div>';
+    shownDates.forEach(function(d) {
       h += '<div class="usage-item"><span style="color:var(--text)">' + formatDate(d) + '</span>';
       h += '<span style="color:var(--text3);font-size:11px;display:flex;align-items:center;gap:8px">' + daysAgo(d);
       h += ' <span style="cursor:pointer;color:var(--text3)" data-action="removeUsage" data-key="' + E(key) + '" data-arg="' + d + '">\u2715</span>';
       h += '</span></div>';
     });
+    if (allDates.some(function(d){ return d < histCutoff; })) {
+      h += '<button class="btn btn-ghost" style="width:100%;margin-top:6px;padding:7px 12px;font-size:12px;border-radius:8px" data-action="toggleHistory" data-key="' + E(key) + '">' +
+        (showAllHist ? 'Show last 2 years only' : 'Show all (' + allDates.length + ')') + '</button>';
+    }
   }
   h += '</div>';
 
@@ -3558,6 +3607,10 @@ function getReportYears() {
   return Object.keys(years).map(Number).sort(function(a,b){return b-a;});
 }
 
+function byTitle(a, b) {
+  return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+}
+
 // Primary sort: most used in the year. Secondary: alphabetical by title.
 function getYearReport(year) {
   return songs.map(function(s) {
@@ -3566,8 +3619,53 @@ function getYearReport(year) {
   }).filter(function(r){ return r.count > 0; })
     .sort(function(a,b) {
       if (b.count !== a.count) return b.count - a.count;
-      return a.song.title.localeCompare(b.song.title, undefined, { sensitivity: "base" });
+      return byTitle(a.song, b.song);
     });
+}
+
+function getYearSummary(year) {
+  var rows = getYearReport(year);
+  var usedIds = {};
+  rows.forEach(function(r){ usedIds[r.song.title + "|" + r.song.hymnNumber] = true; });
+  var unused = songs.filter(function(s){ return !usedIds[s.title + "|" + s.hymnNumber]; }).slice().sort(byTitle);
+
+  // Categories: songs and uses per category
+  var cats = {};
+  CATEGORY_OPTIONS.filter(function(c){return c;}).forEach(function(c){ cats[c] = { name: c, songs: 0, uses: 0 }; });
+  cats["Uncategorized"] = { name: "Uncategorized", songs: 0, uses: 0 };
+  rows.forEach(function(r) {
+    var c = r.song.category || "Uncategorized";
+    if (!cats[c]) cats[c] = { name: c, songs: 0, uses: 0 };
+    cats[c].songs++; cats[c].uses += r.count;
+  });
+  var catList = Object.keys(cats).map(function(k){ return cats[k]; })
+    .sort(function(a,b){ return b.uses - a.uses || a.name.localeCompare(b.name); });
+
+  // Tags: every tag in the catalog, with how many times its songs were used this year
+  var tags = {};
+  songs.forEach(function(s){ (s.tags || []).forEach(function(t){ if (!tags[t]) tags[t] = { name: t, uses: 0 }; }); });
+  rows.forEach(function(r){ (r.song.tags || []).forEach(function(t){ tags[t].uses += r.count; }); });
+  var tagList = Object.keys(tags).map(function(k){ return tags[k]; });
+  var topTags = tagList.slice().sort(function(a,b){ return b.uses - a.uses || a.name.localeCompare(b.name); }).filter(function(t){return t.uses>0;}).slice(0, 8);
+  var topNames = {}; topTags.forEach(function(t){ topNames[t.name] = true; });
+  var leastTags = tagList.filter(function(t){ return !topNames[t.name]; }).sort(function(a,b){ return a.uses - b.uses || a.name.localeCompare(b.name); }).slice(0, 8);
+
+  return {
+    rows: rows,
+    total: rows.reduce(function(n,r){ return n + r.count; }, 0),
+    distinct: rows.length,
+    once: rows.filter(function(r){ return r.count === 1; }).length,
+    unused: unused,
+    categories: catList,
+    topTags: topTags,
+    leastTags: leastTags
+  };
+}
+
+// Today's date as YYYY-MM-DD in local time (toISOString uses UTC and can be a day off)
+function localDateStr(d) {
+  d = d || new Date();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 }
 
 function shortDate(d) {
@@ -3576,8 +3674,8 @@ function shortDate(d) {
 }
 
 function renderYearReportCard() {
-  var rows = getYearReport(reportYear);
-  var total = rows.reduce(function(n,r){ return n + r.count; }, 0);
+  var sum = getYearSummary(reportYear);
+  var has = sum.rows.length > 0;
   var h = '<div class="dash-card"><div class="section-label">\uD83D\uDCCA Yearly Song Report</div>';
   h += '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">';
   h += '<select class="sort" id="reportYearSelect" aria-label="Report year">';
@@ -3585,23 +3683,28 @@ function renderYearReportCard() {
     h += '<option value="' + y + '"' + (y === reportYear ? ' selected' : '') + '>' + y + '</option>';
   });
   h += '</select>';
-  h += '<div style="flex:1;min-width:140px;font-size:13px;color:var(--text2)">' + rows.length + ' song' + (rows.length === 1 ? '' : 's') + ', ' + total + ' use' + (total === 1 ? '' : 's') + '</div>';
+  h += '<div style="flex:1;min-width:140px;font-size:13px;color:var(--text2)">' + sum.distinct + ' song' + (sum.distinct === 1 ? '' : 's') + ', ' + sum.total + ' use' + (sum.total === 1 ? '' : 's') + ', ' + sum.unused.length + ' not used</div>';
   h += '</div>';
+  h += '<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;color:var(--text2);cursor:pointer">';
+  h += '<input type="checkbox" id="reportIncludeUnused"' + (reportIncludeUnused ? ' checked' : '') + '> Include list of songs not used';
+  h += '</label>';
   h += '<div style="display:flex;gap:8px;margin-top:10px">';
-  h += '<button class="btn btn-copper" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (rows.length ? '' : ' disabled') + ' data-action="exportYearPdf">\uD83D\uDCC4 Print / PDF</button>';
-  h += '<button class="btn btn-ghost" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (rows.length ? '' : ' disabled') + ' data-action="exportYearCsv">\u2B07 Download CSV</button>';
+  h += '<button class="btn btn-copper" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (has ? '' : ' disabled') + ' data-action="exportYearPdf">\uD83D\uDCC4 Print / PDF</button>';
+  h += '<button class="btn btn-ghost" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px"' + (has ? '' : ' disabled') + ' data-action="exportYearCsv">\u2B07 Download CSV</button>';
   h += '</div>';
-  if (!rows.length) h += '<div style="font-size:12px;color:var(--text3);font-style:italic;margin-top:8px">No songs logged in ' + reportYear + ' yet.</div>';
+  if (!has) h += '<div style="font-size:12px;color:var(--text3);font-style:italic;margin-top:8px">No songs logged in ' + reportYear + ' yet.</div>';
   h += '</div>';
   return h;
 }
 
 function doExportYearPdf() {
   var year = reportYear;
-  var rows = getYearReport(year);
-  var total = rows.reduce(function(n,r){ return n + r.count; }, 0);
+  var sum = getYearSummary(year);
+  var rows = sum.rows;
   var hymnalLabel = (appSettings.activeHymnal === "bh2008") ? "Baptist Hymnal (2008)" : (appSettings.activeHymnal === "bh1991") ? "Baptist Hymnal (1991)" : "Sing! Hymnal";
+  var num = function(s){ return s.hymnNumber ? '#' + s.hymnNumber : ''; };
   var html = '<!DOCTYPE html><html><head><meta charset="UTF-8">';
+  html += '<meta name="viewport" content="width=device-width, initial-scale=1">';
   html += '<title>' + E(appSettings.churchName || 'Song Usage') + ' - ' + year + ' Song Report</title>';
   html += '<style>';
   html += 'body{font-family:Georgia,serif;max-width:720px;margin:0 auto;padding:24px 28px;color:#1A1A2E;font-size:11px}';
@@ -3609,13 +3712,24 @@ function doExportYearPdf() {
   html += '.church-name{font-size:18px;font-weight:bold;color:#3B5998;margin:0}';
   html += '.church-loc{font-size:11px;color:#4A4A6A;margin:1px 0 0}';
   html += 'h1{font-size:16px;margin:8px 0 2px;text-align:center}';
+  html += 'h2{font-size:13px;color:#3B5998;margin:18px 0 6px;padding-bottom:3px;border-bottom:1px solid #1A1A2E;page-break-after:avoid}';
   html += '.summary{font-size:11px;color:#4A4A6A;text-align:center;padding-bottom:8px;margin-bottom:10px;border-bottom:2px solid #B8860B}';
+  html += '.stats{display:flex;gap:8px;margin:4px 0 10px}';
+  html += '.stat{flex:1;border:1px solid #DAD8D2;border-radius:6px;padding:8px 6px;text-align:center}';
+  html += '.stat b{display:block;font-size:18px;color:#000}.stat span{font-size:10px;color:#4A4A6A}';
+  html += '.two{display:flex;gap:18px;flex-wrap:wrap}.two>div{flex:1;min-width:220px}';
   html += 'table{width:100%;border-collapse:collapse}';
   html += 'th{text-align:left;font-size:10px;color:#3B5998;border-bottom:1px solid #1A1A2E;padding:4px 6px}';
   html += 'td{padding:5px 6px;border-bottom:1px solid #DAD8D2;vertical-align:top}';
   html += 'tr{page-break-inside:avoid}';
+  html += '.small td,.small th{padding:3px 6px}';
+  html += '.r{text-align:right}';
   html += '.rank{color:#7A7A96;width:22px}.num{color:#000;font-weight:bold;width:40px;white-space:nowrap}.count{font-weight:bold;text-align:center;width:40px}';
   html += '.title{font-weight:bold}.dates{color:#4A4A6A;font-size:10px}';
+  html += '.taglist{line-height:1.7}.muted{color:#7A7A96;font-style:italic}';
+  html += '.unused{columns:3;column-gap:18px;font-size:10px;line-height:1.5}';
+  html += '.unused div{break-inside:avoid;padding-left:36px;text-indent:-36px}.unused b{display:inline-block;min-width:36px;text-indent:0;color:#000}';
+  html += '@media (max-width:520px){.unused{columns:2}.stats{flex-wrap:wrap}.stat{min-width:40%}}';
   html += '@media print{body{padding:0}@page{margin:0.5in}}';
   html += '</style></head><body>';
   html += '<div class="header-block">';
@@ -3623,29 +3737,72 @@ function doExportYearPdf() {
   if (appSettings.churchLocation) html += '<div class="church-loc">' + E(appSettings.churchLocation) + '</div>';
   html += '</div>';
   html += '<h1>' + year + ' Song Usage Report</h1>';
-  html += '<div class="summary">' + E(hymnalLabel) + ' &nbsp;|&nbsp; ' + rows.length + ' songs &nbsp;|&nbsp; ' + total + ' total uses &nbsp;|&nbsp; Printed ' + formatDate(new Date().toISOString().split("T")[0]) + '</div>';
+  html += '<div class="summary">' + E(hymnalLabel) + ' &nbsp;|&nbsp; Printed ' + formatDate(localDateStr()) + '</div>';
+
+  // Summary tiles
+  html += '<div class="stats">';
+  html += '<div class="stat"><b>' + sum.distinct + '</b><span>different songs</span></div>';
+  html += '<div class="stat"><b>' + sum.total + '</b><span>total uses</span></div>';
+  html += '<div class="stat"><b>' + sum.once + '</b><span>sung only once</span></div>';
+  html += '<div class="stat"><b>' + sum.unused.length + '</b><span>not used</span></div>';
+  html += '</div>';
+
+  // Categories and tags
+  html += '<div class="two">';
+  html += '<div><h2>By Category</h2><table class="small"><thead><tr><th>Category</th><th class="r">Songs</th><th class="r">Uses</th></tr></thead><tbody>';
+  sum.categories.forEach(function(c) {
+    html += '<tr><td>' + E(c.name) + '</td><td class="r">' + c.songs + '</td><td class="r">' + c.uses + '</td></tr>';
+  });
+  html += '</tbody></table></div>';
+  html += '<div><h2>Tags</h2>';
+  if (!sum.topTags.length && !sum.leastTags.length) {
+    html += '<div class="muted">No tagged songs were used this year.</div>';
+  } else {
+    html += '<div class="taglist"><b>Most represented:</b> ' + (sum.topTags.length ? sum.topTags.map(function(t){ return E(t.name) + ' (' + t.uses + ')'; }).join(', ') : '<span class="muted">none</span>') + '</div>';
+    if (sum.leastTags.length) html += '<div class="taglist" style="margin-top:6px"><b>Least represented:</b> ' + sum.leastTags.map(function(t){ return E(t.name) + ' (' + t.uses + ')'; }).join(', ') + '</div>';
+  }
+  html += '</div></div>';
+
+  // Main ranked table
+  html += '<h2>Songs Used, Most to Least</h2>';
   html += '<table><thead><tr><th></th><th>#</th><th>Song</th><th style="text-align:center">Times</th><th>Dates used</th></tr></thead><tbody>';
   rows.forEach(function(r, i) {
     html += '<tr><td class="rank">' + (i+1) + '.</td>';
-    html += '<td class="num">' + (r.song.hymnNumber ? '#' + r.song.hymnNumber : '') + '</td>';
+    html += '<td class="num">' + num(r.song) + '</td>';
     html += '<td class="title">' + E(r.song.title) + '</td>';
     html += '<td class="count">' + r.count + '</td>';
     html += '<td class="dates">' + r.dates.map(shortDate).join(', ') + '</td></tr>';
   });
   html += '</tbody></table>';
+
+  // Songs not used
+  if (reportIncludeUnused && sum.unused.length) {
+    html += '<h2>Not Used in ' + year + ' (' + sum.unused.length + ')</h2>';
+    html += '<div class="unused">';
+    sum.unused.forEach(function(s) {
+      html += '<div><b>' + num(s) + '</b>' + E(s.title) + '</div>';
+    });
+    html += '</div>';
+  }
+
   html += '</body></html>';
   showPrintPreview(html, year + ' Song Report');
 }
 
 function doExportYearCsv() {
   var year = reportYear;
-  var rows = getYearReport(year);
+  var sum = getYearSummary(year);
   var q = function(v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
   var lines = [["Rank","Hymn Number","Title","Times Used","Dates Used","Tune","Category","Tags"].join(",")];
-  rows.forEach(function(r, i) {
+  sum.rows.forEach(function(r, i) {
     var s = r.song;
     lines.push([i+1, s.hymnNumber || "", s.title, r.count, r.dates.join("; "), s.tune || "", s.category || "", (s.tags || []).join("; ")].map(q).join(","));
   });
+  if (reportIncludeUnused) {
+    sum.unused.forEach(function(s) {
+      lines.push(["", s.hymnNumber || "", s.title, 0, "", s.tune || "", s.category || "", (s.tags || []).join("; ")].map(q).join(","));
+    });
+  }
   var blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   var url = URL.createObjectURL(blob);
   var a = document.createElement("a");
@@ -3653,6 +3810,67 @@ function doExportYearCsv() {
   a.download = "song-usage-report-" + year + ".csv";
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// BACKUP REMINDER
+// ============================================================
+var BACKUP_KEY = "cmp-lastBackup";
+var BACKUP_SNOOZE_KEY = "cmp-backupSnoozeUntil";
+var BACKUP_REMIND_DAYS = 30;
+var BACKUP_SNOOZE_DAYS = 7;
+
+function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+function getLastBackup() { return lsGet(BACKUP_KEY); }
+
+function daysSinceBackup() {
+  var last = getLastBackup();
+  if (!last) return null;
+  return Math.floor((Date.now() - new Date(last).getTime()) / 86400000);
+}
+
+function hasUserData() {
+  return songs.some(function(s) {
+    return (s.usageDates && s.usageDates.length) || (s.tags && s.tags.length) || (s.notes && s.notes.length) || s.category || s.isCustom;
+  });
+}
+
+function backupNeedsReminder() {
+  if (!hasUserData()) return false;
+  var snooze = lsGet(BACKUP_SNOOZE_KEY);
+  if (snooze && Date.now() < parseInt(snooze)) return false;
+  var d = daysSinceBackup();
+  return d === null || d >= BACKUP_REMIND_DAYS;
+}
+
+function snoozeBackupReminder() {
+  lsSet(BACKUP_SNOOZE_KEY, String(Date.now() + BACKUP_SNOOZE_DAYS * 86400000));
+  render();
+}
+
+function backupStatusText() {
+  var last = getLastBackup();
+  if (!last) return "Never backed up on this device";
+  var d = daysSinceBackup();
+  var when = d <= 0 ? "today" : d === 1 ? "yesterday" : d + " days ago";
+  return "Last backup: " + formatDate(localDateStr(new Date(last))) + " (" + when + ")";
+}
+
+function renderBackupReminder() {
+  if (!backupNeedsReminder()) return "";
+  var d = daysSinceBackup();
+  var msg = d === null ? "You haven't backed up your data on this device yet."
+                       : "It's been " + d + " days since your last backup.";
+  var h = '<div class="dash-card" style="border-left:4px solid var(--accent)">';
+  h += '<div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px">\uD83D\uDCBE Time for a backup</div>';
+  h += '<div style="font-size:13px;color:var(--text2);margin-bottom:10px">' + msg + ' Your usage history, notes and plans are only stored on this device.</div>';
+  h += '<div style="display:flex;gap:8px">';
+  h += '<button class="btn btn-copper" style="flex:1;padding:9px 14px;font-size:13px;border-radius:8px" data-action="exportData">\u2B07 Back up now</button>';
+  h += '<button class="btn btn-ghost" style="padding:9px 14px;font-size:13px;border-radius:8px" data-action="snoozeBackup">Later</button>';
+  h += '</div></div>';
+  return h;
 }
 
 function doExportPlanPdf() {
@@ -4005,7 +4223,9 @@ function renderDashboard(nextSunday) {
     .map(function(s){return Object.assign({},s,{lastDate:s.usageDates[0]});})
     .sort(function(a,b){return b.lastDate.localeCompare(a.lastDate);}).slice(0, 8);
 
-  var mostUsed = usedSongs.slice().sort(function(a,b){return b.usageDates.length - a.usageDates.length;}).slice(0, 7);
+  var mostUsed = usedSongs.map(function(s){ return Object.assign({}, s, { recentCount: usesSince(s, RECENT_USE_DAYS).length }); })
+    .filter(function(s){ return s.recentCount > 0; })
+    .sort(function(a,b){ return b.recentCount - a.recentCount || a.title.localeCompare(b.title); }).slice(0, 7);
 
   var tagCounts = {};
   songs.forEach(function(s){s.tags.forEach(function(t){tagCounts[t]=(tagCounts[t]||0)+1;});});
@@ -4018,6 +4238,9 @@ function renderDashboard(nextSunday) {
   }).filter(function(s){return s.daysSince>=60 && s.daysSince<=180;}).sort(function(a,b){return b.daysSince-a.daysSince;}).slice(0,25);
 
   var h = '<div style="padding:0 16px">';
+
+  // Backup reminder (only when overdue)
+  h += renderBackupReminder();
 
   // Sunday
   h += '<div class="dash-card">';
@@ -4058,17 +4281,17 @@ function renderDashboard(nextSunday) {
 
   // Most used
   if (mostUsed.length) {
-    var maxUse = mostUsed[0].usageDates.length;
-    h += '<div class="dash-card"><div class="section-label">\u2B50 Most Used Songs</div>';
+    var maxUse = mostUsed[0].recentCount;
+    h += '<div class="dash-card"><div class="section-label">\u2B50 Most Used Songs <span style="text-transform:none;letter-spacing:0;font-weight:500;color:var(--text3)">\u00B7 last 12 months</span></div>';
     mostUsed.forEach(function(s,i) {
-      var pct = (s.usageDates.length / maxUse * 100);
+      var pct = (s.recentCount / maxUse * 100);
       h += '<div data-action="navigateToSong" data-key="' + E(songKey(s)) + '" style="display:flex;align-items:center;gap:10px;padding:8px 0;cursor:pointer;' + (i<mostUsed.length-1?'border-bottom:1px solid var(--border2)':'') + '">';
       h += '<div class="mini-num">' + s.hymnNumber + '</div>';
       h += '<div style="flex:1;min-width:0">';
       h += '<div class="mini-title">' + E(s.title) + '</div>';
       h += '<div style="display:flex;align-items:center;gap:6px;margin-top:3px">';
       h += '<div class="mu-bar-bg"><div class="mu-bar" style="width:' + pct + '%"></div></div>';
-      h += '<span style="font-size:11px;color:var(--text2);font-weight:600;min-width:16px">' + s.usageDates.length + '\u00D7</span>';
+      h += '<span style="font-size:11px;color:var(--text2);font-weight:600;min-width:16px">' + s.recentCount + '\u00D7</span>';
       h += '</div></div></div>';
     });
     h += '</div>';
@@ -4213,7 +4436,10 @@ function renderAdminTab() {
   // Backup & Restore
   h += '<div class="dash-card">';
   h += '<div class="section-label">\uD83D\uDCBE Backup & Restore</div>';
-  h += '<div style="font-size:13px;color:var(--text2);margin-bottom:12px">Export your notes, tags, categories, and usage logs as a file. Import to restore on any device.</div>';
+  h += '<div style="font-size:13px;color:var(--text2);margin-bottom:8px">Export your notes, tags, categories, and usage logs as a file. Import to restore on any device.</div>';
+  var bdays = daysSinceBackup();
+  var bOverdue = bdays === null || bdays >= BACKUP_REMIND_DAYS;
+  h += '<div style="font-size:13px;font-weight:600;margin-bottom:12px;color:' + (bOverdue ? 'var(--red)' : 'var(--green)') + '">' + (bOverdue ? '\u26A0\uFE0F ' : '\u2705 ') + E(backupStatusText()) + '</div>';
   h += '<div style="display:flex;gap:8px">';
   h += '<button class="btn btn-copper" style="flex:1;padding:10px 14px;font-size:13px;border-radius:8px" data-action="exportData">\u2B07 Export Data</button>';
   h += '<label class="btn btn-navy" style="flex:1;padding:10px 14px;font-size:13px;border-radius:8px;text-align:center;cursor:pointer">\u2B06 Import Data<input type="file" accept=".json" id="importFileInput" style="display:none"></label>';
@@ -4496,12 +4722,14 @@ async function exportData() {
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
     a.href = url;
-    var dateStr = new Date().toISOString().split("T")[0];
+    var dateStr = localDateStr();
     a.download = "church-music-planner-backup-" + dateStr + ".json";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    lsSet(BACKUP_KEY, new Date().toISOString());
+    lsSet(BACKUP_SNOOZE_KEY, "");
     showImportStatus("success", "Backup exported (" + entries.length + " songs, " + customs.length + " custom, " + team.length + " team, " + plans.length + " plans)");
   } catch(err) {
     showImportStatus("error", "Export failed: " + err.message);
@@ -4612,7 +4840,7 @@ async function importData(file) {
     var userData = await loadAllUserData();
     customSongsRaw = await loadCustomSongs();
     songs = mergeSongs(getHymnalSongs(), userData).concat(customSongsRaw.map(customToSong));
-    teamMembers = await loadTeamMembers();
+    teamMembers = await pruneOldAvailability(await loadTeamMembers());
     serviceTemplate = await loadServiceTemplate();
     appSettings = await loadSettings();
     currentPlan = await loadServicePlan(planDate || getNextSunday());
@@ -4643,7 +4871,7 @@ async function init() {
   var userData = await loadAllUserData();
   customSongsRaw = await loadCustomSongs();
   songs = mergeSongs(getHymnalSongs(), userData).concat(customSongsRaw.map(customToSong));
-  teamMembers = await loadTeamMembers();
+  teamMembers = await pruneOldAvailability(await loadTeamMembers());
   serviceTemplate = await loadServiceTemplate();
   appSettings = await loadSettings();
   planDate = getNextSunday();
