@@ -3614,7 +3614,7 @@ function doExportYearPdf() {
   html += 'th{text-align:left;font-size:10px;color:#3B5998;border-bottom:1px solid #1A1A2E;padding:4px 6px}';
   html += 'td{padding:5px 6px;border-bottom:1px solid #DAD8D2;vertical-align:top}';
   html += 'tr{page-break-inside:avoid}';
-  html += '.rank{color:#7A7A96;width:22px}.num{color:#B8860B;font-weight:bold;width:34px}.count{font-weight:bold;text-align:center;width:40px}';
+  html += '.rank{color:#7A7A96;width:22px}.num{color:#000;font-weight:bold;width:40px;white-space:nowrap}.count{font-weight:bold;text-align:center;width:40px}';
   html += '.title{font-weight:bold}.dates{color:#4A4A6A;font-size:10px}';
   html += '@media print{body{padding:0}@page{margin:0.5in}}';
   html += '</style></head><body>';
@@ -3627,7 +3627,7 @@ function doExportYearPdf() {
   html += '<table><thead><tr><th></th><th>#</th><th>Song</th><th style="text-align:center">Times</th><th>Dates used</th></tr></thead><tbody>';
   rows.forEach(function(r, i) {
     html += '<tr><td class="rank">' + (i+1) + '.</td>';
-    html += '<td class="num">' + (r.song.hymnNumber || '') + '</td>';
+    html += '<td class="num">' + (r.song.hymnNumber ? '#' + r.song.hymnNumber : '') + '</td>';
     html += '<td class="title">' + E(r.song.title) + '</td>';
     html += '<td class="count">' + r.count + '</td>';
     html += '<td class="dates">' + r.dates.map(shortDate).join(', ') + '</td></tr>';
@@ -3671,7 +3671,7 @@ function doExportPlanPdf() {
   html += '.date{font-size:12px;color:#4A4A6A;margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #B8860B;text-align:center}';
   html += '.text-el{font-size:10px;font-weight:bold;color:#3B5998;text-transform:uppercase;letter-spacing:.4px;margin:10px 0 4px}';
   html += '.song{margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #DAD8D2;display:flex;gap:6px;align-items:baseline}';
-  html += '.song-num{font-size:16px;color:#B8860B;min-width:26px;font-weight:bold}';
+  html += '.song-num{font-size:16px;color:#000;min-width:26px;font-weight:bold}';
   html += '.song-title{font-size:13px;font-weight:bold;color:#1A1A2E}';
   html += '.song-sub{font-size:9px;color:#4A4A6A;margin-top:1px}';
   html += '.song-order{font-size:9px;color:#3B5998;font-style:italic;margin-top:1px}';
@@ -3692,7 +3692,7 @@ function doExportPlanPdf() {
       var assigned = assignments[item.id] ? findSong(assignments[item.id]) : null;
       if (assigned) {
         html += '<div class="song">';
-        html += '<span class="song-num">' + (assigned.hymnNumber || '') + '</span>';
+        html += '<span class="song-num">' + (assigned.hymnNumber ? '#' + assigned.hymnNumber : '') + '</span>';
         html += '<div>';
         html += '<div class="song-title">' + E(assigned.title) + '</div>';
         var subParts = [];
@@ -4032,9 +4032,6 @@ function renderDashboard(nextSunday) {
     h += '</div>';
   }
 
-  // Annual usage report
-  h += renderYearReportCard();
-
   // Top tags
   if (tagRanking.length) {
     h += '<div class="dash-card"><div class="section-label">\uD83C\uDFF7\uFE0F Top Tags</div><div class="tag-cloud">';
@@ -4167,6 +4164,9 @@ function renderAdminTab() {
   h += '<div style="font-size:11px;color:var(--text2);margin-top:2px;padding-bottom:6px;border-bottom:2px solid var(--accent)">' + formatDate(getNextSunday()) + '</div>';
   h += '</div>';
   h += '</div>';
+
+  // Yearly song report
+  h += renderYearReportCard();
 
   // Backup & Restore
   h += '<div class="dash-card">';
