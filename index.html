@@ -3633,11 +3633,8 @@ function doExportYearPdf() {
     html += '<td class="dates">' + r.dates.map(shortDate).join(', ') + '</td></tr>';
   });
   html += '</tbody></table>';
-  html += '<script>window.onload=function(){window.print();}<\/script>';
   html += '</body></html>';
-  var w = window.open('', '_blank');
-  if (w) { w.document.write(html); w.document.close(); }
-  else alert('Please allow pop-ups to export PDF.');
+  showPrintPreview(html, year + ' Song Report');
 }
 
 function doExportYearCsv() {
@@ -3708,16 +3705,61 @@ function doExportPlanPdf() {
     }
   });
 
-  html += '<script>window.onload=function(){window.print();}<\/script>';
   html += '</body></html>';
 
-  var w = window.open('', '_blank');
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-  } else {
-    alert('Please allow pop-ups to export PDF.');
-  }
+  showPrintPreview(html, 'Order of Service');
+}
+
+// Shows a print-ready page inside the app with Print and Close buttons.
+// (Opening a new window traps the user when the app runs from the home screen,
+// because there is no browser back button or tab bar to return with.)
+function showPrintPreview(html, title) {
+  closePrintPreview();
+  var overlay = document.createElement('div');
+  overlay.id = 'printPreview';
+  overlay.setAttribute('style',
+    'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;background:var(--bg,#fff);' +
+    'padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)');
+
+  var bar = document.createElement('div');
+  bar.setAttribute('style',
+    'display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border2,#ddd);background:var(--card-bg,#fafaf8)');
+  var close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'btn btn-ghost';
+  close.textContent = '\u2190 Back to app';
+  close.setAttribute('style', 'padding:8px 14px;font-size:14px;border-radius:8px');
+  var label = document.createElement('div');
+  label.textContent = title || '';
+  label.setAttribute('style', 'flex:1;min-width:0;text-align:center;font-weight:600;color:var(--text,#1A1A2E);white-space:nowrap;overflow:hidden;text-overflow:ellipsis');
+  var print = document.createElement('button');
+  print.type = 'button';
+  print.className = 'btn btn-copper';
+  print.textContent = '\uD83D\uDCC4 Print / Save PDF';
+  print.setAttribute('style', 'padding:8px 14px;font-size:14px;border-radius:8px');
+  bar.appendChild(close); bar.appendChild(label); bar.appendChild(print);
+
+  var frame = document.createElement('iframe');
+  frame.title = title || 'Print preview';
+  frame.setAttribute('style', 'flex:1;width:100%;border:0;background:#fff');
+  frame.srcdoc = html;
+
+  overlay.appendChild(bar);
+  overlay.appendChild(frame);
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+
+  close.addEventListener('click', closePrintPreview);
+  print.addEventListener('click', function() {
+    try { frame.contentWindow.focus(); frame.contentWindow.print(); }
+    catch (e) { window.print(); }
+  });
+}
+
+function closePrintPreview() {
+  var o = document.getElementById('printPreview');
+  if (o) o.parentNode.removeChild(o);
+  document.body.style.overflow = '';
 }
 
 // ============================================================
