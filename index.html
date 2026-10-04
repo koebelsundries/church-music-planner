@@ -2531,7 +2531,6 @@ let planSearchQuery = "";
 let editingTemplate = false;
 let planPreviewOpen = false;
 let planCopied = false;
-let planShowLinks = false;
 let reportYear = new Date().getFullYear();
 let appSettings = { id: "app", churchName: "", churchLocation: "", activeHymnal: "sing" };
 
@@ -2646,8 +2645,6 @@ document.addEventListener("click", function(e) {
     case "resetKeys": doResetKeys(key); break;
     case "saveSongOrder": doSaveSongOrder(key); break;
     case "saveCcli": doSaveCcli(key); break;
-    case "addLink": doAddLink(key); break;
-    case "removeLink": doRemoveLink(key, parseInt(el.dataset.idx)); break;
     // Plan actions
     case "planPrevWeek": doPlanNav(-7); break;
     case "planNextWeek": doPlanNav(7); break;
@@ -2670,7 +2667,6 @@ document.addEventListener("click", function(e) {
     case "toggleTheme": toggleTheme(); break;
     case "openPlanPreview": planPreviewOpen = true; render(); break;
     case "closePlanPreview": planPreviewOpen = false; render(); break;
-    case "togglePlanLinks": planShowLinks = !planShowLinks; render(); break;
     case "copyPlanText": doCopyPlanText(); break;
     case "exportPlanPdf": doExportPlanPdf(); break;
     case "saveChurchSettings": doSaveChurchSettings(); break;
@@ -2789,32 +2785,6 @@ function doSaveCcli(key) {
   var s = findSong(key);
   if (!s || !inp) return;
   s.ccli = inp.value.trim();
-  update(s);
-}
-
-function doAddLink(key) {
-  var urlInp = document.getElementById("linkUrlInput-" + key);
-  var labelInp = document.getElementById("linkLabelInput-" + key);
-  var s = findSong(key);
-  if (!s || !urlInp || !urlInp.value.trim()) return;
-  if (!s.links) s.links = [];
-  var url = urlInp.value.trim();
-  var label = labelInp ? labelInp.value.trim() : "";
-  // Auto-label from URL if no label given
-  if (!label) {
-    var llc = url.toLowerCase();
-    if (llc.includes('youtube') || llc.includes('youtu.be')) label = 'YouTube';
-    else if (llc.includes('spotify')) label = 'Spotify';
-    else label = url.replace(/^https?:\/\//, '').split('/')[0];
-  }
-  s.links.push({ url: url, label: label });
-  update(s);
-}
-
-function doRemoveLink(key, idx) {
-  var s = findSong(key);
-  if (!s || !s.links) return;
-  s.links.splice(idx, 1);
   update(s);
 }
 
@@ -3237,28 +3207,6 @@ function renderDetail(s) {
   h += '<div style="display:flex;gap:6px">';
   h += '<input class="input" style="flex:1" id="ccliInput-' + key + '" placeholder="e.g. 1234567" value="' + E(s.ccli || '') + '">';
   h += '<button class="btn btn-copper" data-action="saveCcli" data-key="' + E(key) + '">Save</button>';
-  h += '</div></div>';
-
-  // Links (YouTube, Spotify, etc.)
-  h += '<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border2)">';
-  h += '<div class="section-label">Links</div>';
-  if (s.links && s.links.length) {
-    s.links.forEach(function(lnk, i) {
-      var icon = '\uD83D\uDD17';
-      var llc = lnk.url ? lnk.url.toLowerCase() : '';
-      if (llc.includes('youtube') || llc.includes('youtu.be')) icon = '\u25B6\uFE0F';
-      else if (llc.includes('spotify')) icon = '\uD83C\uDFB5';
-      h += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;padding:6px 10px;background:var(--bg3);border-radius:6px">';
-      h += '<span>' + icon + '</span>';
-      h += '<a href="' + E(lnk.url) + '" target="_blank" rel="noopener" style="flex:1;min-width:0;color:var(--accent2);font-size:13px;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + E(lnk.label || lnk.url) + '</a>';
-      h += '<span style="cursor:pointer;color:var(--text3);font-size:12px" data-action="removeLink" data-key="' + E(key) + '" data-idx="' + i + '">\u2715</span>';
-      h += '</div>';
-    });
-  }
-  h += '<div style="display:flex;gap:6px;margin-top:6px">';
-  h += '<input class="input" style="flex:2;min-width:0" id="linkUrlInput-' + key + '" placeholder="Paste URL...">';
-  h += '<input class="input" style="flex:1;min-width:0" id="linkLabelInput-' + key + '" placeholder="Label (optional)">';
-  h += '<button class="btn btn-copper" data-action="addLink" data-key="' + E(key) + '">Add</button>';
   h += '</div></div>';
 
   if (s.scripture) {
@@ -3727,7 +3675,6 @@ function doExportPlanPdf() {
   html += '.song-title{font-size:13px;font-weight:bold;color:#1A1A2E}';
   html += '.song-sub{font-size:9px;color:#4A4A6A;margin-top:1px}';
   html += '.song-order{font-size:9px;color:#3B5998;font-style:italic;margin-top:1px}';
-  html += '.song-link{font-size:8px;color:#3B5998;text-decoration:none;margin-right:8px}';
   html += '.not-assigned{font-size:10px;color:#7A7A96;font-style:italic;margin-bottom:8px}';
   html += '@media print{body{padding:12px 20px}@page{margin:0.5in}}';
   html += '</style></head><body>';
@@ -3754,13 +3701,6 @@ function doExportPlanPdf() {
         if (assigned.ccli) subParts.push('CCLI #' + assigned.ccli);
         if (subParts.length) html += '<div class="song-sub">' + E(subParts.join('  \u00B7  ')) + '</div>';
         if (assigned.songOrder) html += '<div class="song-order">' + E(assigned.songOrder) + '</div>';
-        if (planShowLinks && assigned.links && assigned.links.length) {
-          html += '<div style="margin-top:3px">';
-          assigned.links.forEach(function(lnk) {
-            html += '<a class="song-link" href="' + E(lnk.url) + '">' + E(lnk.label || lnk.url) + '</a>';
-          });
-          html += '</div>';
-        }
         html += '</div></div>';
       } else {
         html += '<div class="not-assigned">' + E(item.label) + ' \u2014 (not assigned)</div>';
@@ -3947,7 +3887,6 @@ function renderPlanPreview() {
   h += '<div class="preview-header">';
   h += '<span style="font-size:14px;font-weight:600;color:var(--text)">Service Order</span>';
   h += '<div style="display:flex;gap:8px;align-items:center">';
-  h += '<button class="btn ' + (planShowLinks?'btn-copper':'btn-ghost') + '" style="padding:6px 10px;font-size:11px" data-action="togglePlanLinks">\uD83D\uDD17 Links ' + (planShowLinks?'ON':'OFF') + '</button>';
   h += '<button class="btn ' + (planCopied?'btn-green':'btn-copper') + '" style="padding:6px 14px" data-action="copyPlanText">' + (planCopied?'Copied!':'Copy Text') + '</button>';
   h += '<button class="btn btn-copper" style="padding:6px 14px" data-action="exportPlanPdf">\uD83D\uDCC4 PDF</button>';
   h += '<button class="btn btn-ghost" style="padding:6px 12px" data-action="closePlanPreview">Close</button>';
@@ -3974,17 +3913,6 @@ function renderPlanPreview() {
         if (assigned.ccli) sub += (sub?' \u00B7 ':'') + 'CCLI #' + assigned.ccli;
         if (sub) h += '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + E(sub) + '</div>';
         if (assigned.songOrder) h += '<div style="font-size:12px;color:var(--accent2);margin-top:3px;font-style:italic">' + E(assigned.songOrder) + '</div>';
-        if (planShowLinks && assigned.links && assigned.links.length) {
-          h += '<div style="margin-top:4px">';
-          assigned.links.forEach(function(lnk) {
-            var icon = '\uD83D\uDD17';
-            var llc = lnk.url ? lnk.url.toLowerCase() : '';
-            if (llc.includes('youtube') || llc.includes('youtu.be')) icon = '\u25B6\uFE0F';
-            else if (llc.includes('spotify')) icon = '\uD83C\uDFB5';
-            h += '<a href="' + E(lnk.url) + '" target="_blank" rel="noopener" style="display:inline-block;font-size:11px;color:var(--accent2);margin-right:10px;text-decoration:none">' + icon + ' ' + E(lnk.label || lnk.url) + '</a>';
-          });
-          h += '</div>';
-        }
         h += '</div></div></div>';
       } else {
         h += '<div style="margin-bottom:12px;font-size:13px;color:var(--text3);font-style:italic">' + E(item.label) + ' \u2014 (not assigned)</div>';
@@ -4016,9 +3944,6 @@ function buildPlanText() {
         if (assigned.ccli) line += " (CCLI #" + assigned.ccli + ")";
         lines.push("  " + line);
         if (assigned.songOrder) lines.push("    " + assigned.songOrder);
-        if (planShowLinks && assigned.links && assigned.links.length) {
-          assigned.links.forEach(function(lnk) { lines.push("    " + (lnk.label || '') + ": " + lnk.url); });
-        }
       } else {
         lines.push("  " + item.label + " - (not assigned)");
       }
